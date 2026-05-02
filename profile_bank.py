@@ -31,20 +31,28 @@ async def cmd_profile(message: types.Message):
     escort_count = data.get('escort_count', 0)
     escort_text = f"\n🔞 Выебан(а): {escort_count} раз" if escort_count > 0 else ""
 
-    # --- НОВАЯ ЛОГИКА ДОЛГОВ (ПЕРЕД ИГРОКАМИ) ---
+    # --- НОВАЯ ЛОГИКА ДОЛГОВ (ПЕРЕД ИГРОКАМИ И БАНКАМИ) ---
     debts = data.get('debts', {})
     debt_display = ""
     if debts:
         debt_list = []
         for lender_id_str, amount in debts.items():
             if amount > 0:
-                # Получаем данные кредитора, чтобы узнать его имя
-                lender_data = await get_user_data(chat_id, int(lender_id_str))
-                lender_name = escape_html(lender_data.get('full_name', f"Юзер {lender_id_str}"))
-                debt_list.append(f"<b>{lender_name}</b> ({amount} сыр.)")
+                if lender_id_str.startswith("bank_"):
+                    banker_id = int(lender_id_str.split("_")[1])
+                    bank_data = await get_bank_info(chat_id, banker_id)
+                    lender_name = escape_html(bank_data.get('name', 'Банк')) if bank_data else 'Банк'
+                    debt_list.append(f"🏦 <b>{lender_name}</b> ({amount} сыр.)")
+                else:
+                    try:
+                        lender_data = await get_user_data(chat_id, int(lender_id_str))
+                        lender_name = escape_html(lender_data.get('full_name', f"Юзер {lender_id_str}"))
+                        debt_list.append(f"👤 <b>{lender_name}</b> ({amount} сыр.)")
+                    except ValueError:
+                        pass
         
         if debt_list:
-            debt_display = f"\n💸 <b>Брал(а) в долг у:</b> {', '.join(debt_list)}"
+            debt_display = f"\n💸 <b>Долги:</b> {', '.join(debt_list)}"
     # --------------------------------------------
 
     # Брак
@@ -86,12 +94,31 @@ async def cmd_profile(message: types.Message):
 
     await message.answer(text)
 
-async def get_bank_info(chat_id: int, banker_id: int):
+async def get_bank_info(chat_id: int, identifier):
     db = get_db()
-    bank_ref = db.collection('chats').document(str(chat_id)).collection('banks').document(str(banker_id))
-    doc = await bank_ref.get()
-    if doc.exists:
-        return doc.to_dict()
+    banks_ref = db.collection('chats').document(str(chat_id)).collection('banks')
+
+    # Сначала пробуем по ID банкира
+    try:
+        banker_id = int(identifier)
+        doc = await banks_ref.document(str(banker_id)).get()
+        if doc.exists:
+            data = doc.to_dict()
+            data['banker_id'] = banker_id
+            return data
+    except ValueError:
+        pass
+
+    # Если не ID, ищем по имени банка
+    search_name = str(identifier).lower()
+    docs = await banks_ref.get()
+    for doc in docs:
+        b_data = doc.to_dict()
+        b_name = b_data.get('name', '').lower()
+        if b_name.startswith(search_name) or search_name in b_name:
+            b_data['banker_id'] = int(doc.id)
+            return b_data
+
     return None
 
 async def create_or_update_bank(chat_id: int, banker_id: int, data: dict):
@@ -110,9 +137,9 @@ async def cmd_bank(message: types.Message):
             "🏦 <b>Банки Сыроежек</b>\n\n"
             "Вы можете вложить свои деньги в банк под процент.\n"
             "Команды:\n"
-            "<code>/bank info [ID банкира]</code> - Информация о банке\n"
+            "<code>/bank info [Название или ID]</code> - Информация о банке\n"
             "<code>/bank list</code> - Список всех банков в чате\n"
-            "<code>/bank deposit [сумма] [ID банкира]</code>\n"
+            "<code>/bank deposit [сумма] [Название или ID]</code>\n"
             "<code>/bank withdraw [сумма]</code> - Снять со своего вклада\n\n"
             "<i>(Вы можете иметь вклад только в одном банке одновременно)</i>"
         )
@@ -136,18 +163,15 @@ async def cmd_bank(message: types.Message):
 
     if action == "info":
         if len(args) < 3:
-            return await message.answer("Укажите ID банкира: <code>/bank info [ID]</code>")
-        try:
-            banker_id = int(args[2])
-        except:
-            return await message.answer("ID банкира должен быть числом.")
+            return await message.answer("Укажите название банка или ID: <code>/bank info [Название]</code>")
 
-        bank_data = await get_bank_info(chat_id, banker_id)
+        identifier = " ".join(args[2:])
+        bank_data = await get_bank_info(chat_id, identifier)
         if not bank_data:
-            return await message.answer("🏦 Банк с таким ID не найден.")
+            return await message.answer("🏦 Банк не найден.")
 
         text = f"🏛 <b>{escape_html(bank_data.get('name', 'Банк'))}</b>\n\n"
-        text += f"Владелец (ID): <code>{banker_id}</code>\n"
+        text += f"Владелец (ID): <code>{bank_data['banker_id']}</code>\n"
         text += f"Капитал банка: <b>{bank_data.get('capital', 0)}</b> сыр.\n"
         return await message.answer(text)
 
@@ -164,18 +188,18 @@ async def cmd_bank(message: types.Message):
 
     if action == "deposit":
         if len(args) < 4:
-            return await message.answer("Укажите ID банкира, в чей банк вы хотите вложить: <code>/bank deposit [сумма] [ID банкира]</code>")
-        try:
-            target_banker_id = int(args[3])
-        except:
-            return await message.answer("ID банкира должен быть числом.")
+            return await message.answer("Укажите название банка или ID: <code>/bank deposit [сумма] [Название]</code>")
+
+        identifier = " ".join(args[3:])
+        bank_data = await get_bank_info(chat_id, identifier)
+
+        if not bank_data:
+            return await message.answer("🏦 Банк не найден.")
+
+        target_banker_id = bank_data['banker_id']
 
         if current_banker_id and current_banker_id != target_banker_id and current_deposit > 0:
-            return await message.answer(" У вас уже есть активный вклад в другом банке! Сначала снимите все средства.")
-
-        bank_data = await get_bank_info(chat_id, target_banker_id)
-        if not bank_data:
-            return await message.answer(" Банк с таким ID не найден.")
+            return await message.answer("❌ У вас уже есть активный вклад в другом банке! Сначала снимите все средства.")
 
         if data.get('balance', 0) < amount:
             return await message.answer("Недостаточно средств на балансе.")
@@ -246,53 +270,4 @@ async def cmd_create_bank(message: types.Message):
 
     await message.answer(f"🏛 <b>Банк успешно создан!</b>\nНазвание: {bank_name}\nТеперь игроки могут вкладывать деньги в ваш банк с помощью:\n<code>/bank deposit [сумма] {user_id}</code>")
 
-@router.message(F.text.lower().startswith("снять прибыль"))
-async def cmd_bank_profit(message: types.Message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    data = await get_user_data(chat_id, user_id)
-    if not data.get('is_banker', False):
-        return await message.answer("❌ Эта команда доступна только банкирам.")
-
-    args = message.text.split()
-    if len(args) < 3:
-        return await message.answer("Использование: <code>снять прибыль [сумма]</code>")
-
-    try:
-        amount = int(args[2])
-        if amount <= 0: return
-    except ValueError:
-        return await message.answer("Сумма должна быть числом.")
-
-    bank_data = await get_bank_info(chat_id, user_id)
-    if not bank_data:
-        return await message.answer("❌ У вас нет банка.")
-
-    current_time = int(time.time())
-    last_withdrawal = bank_data.get('last_withdrawal_time', 0)
-
-    if current_time - last_withdrawal < 86400:
-        remain = 86400 - (current_time - last_withdrawal)
-        hours, rem = divmod(remain, 3600)
-        mins, _ = divmod(rem, 60)
-        return await message.answer(f"⏳ Снимать прибыль можно только раз в сутки. Подождите еще {hours} ч. {mins} мин.")
-
-    current_capital = bank_data.get('capital', 0)
-
-    max_withdrawal = int(current_capital * 0.05)
-
-    if max_withdrawal == 0:
-        return await message.answer("❌ В банке недостаточно средств для выплаты дивидендов (менее 20 сыроежек).")
-
-    if amount > max_withdrawal:
-        return await message.answer(f"❌ Центральный Банк ограничивает снятие прибыли до 5% от капитала в день.\nМаксимальная сумма снятия сейчас: <b>{max_withdrawal}</b> сыр.")
-
-    # Списываем из капитала, начисляем на баланс банкиру, записываем время
-    await create_or_update_bank(chat_id, user_id, {
-        'capital': current_capital - amount,
-        'last_withdrawal_time': current_time
-    })
-    await update_user_balance(chat_id, user_id, amount)
-
-    await message.answer(f"💰 Вы успешно вывели <b>{amount}</b> сыроежек в качестве прибыли банка на свой личный счет!")
+# Удалено снятие прибыли, так как банкиры больше не могут выводить капитал банка напрямую себе

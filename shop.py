@@ -58,8 +58,6 @@ def get_category_kb(category):
 @router.message(Command("shop"))
 async def cmd_shop(message: types.Message):
     data = await get_user_data(message.chat.id, message.from_user.id)
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Уважаемый Банкир, вам запрещено покупать бизнесы и машины.")
 
     debts = data.get('debts', {})
 
@@ -112,10 +110,6 @@ async def process_buy(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
     data = await get_user_data(chat_id, user_id)
-
-    # Запрещаем банкирам покупать бизнесы и машины
-    if data.get('is_banker', False) and item.get('cat') in ['biz', 'cars']:
-        return await callback.answer("🏦 Банкирам запрещено приобретать сторонний бизнес и транспорт!", show_alert=True)
 
     if data.get('balance', 0) < item['price']:
         return await callback.answer("Недостаточно денег!", show_alert=True)

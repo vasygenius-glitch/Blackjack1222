@@ -93,13 +93,6 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
 
     current_time = time.time()
     
-    # --- ЛОГИКА ДЛЯ БАНКИРОВ (Убрана выдача 50кк в карман) ---
-    if data.get('is_banker', False):
-        # Банкиры получают 50кк в капитал банка через chat_stats.py, а не на личный баланс.
-        # Поэтому обычный бонус /bonus им недоступен.
-        return False, {}
-    # ---------------------------------------------
-
     last_bonus = data.get('last_bonus_time', 0)
 
     if current_time - last_bonus >= 3600:
@@ -136,6 +129,11 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
                 biz_income += item.get('income', 0) * min(count, 10)
             elif item.get('action') == 'car':
                 car_income += item.get('income', 0) * count
+
+        if data.get('is_banker', False):
+            # Доходы банкиров от бизнесов и машин урезаны до 10%
+            biz_income = int(biz_income * 0.1)
+            car_income = int(car_income * 0.1)
 
         extra_income = biz_income + car_income + bank_income
         tax_amt = int(extra_income * (tax_percent / 100.0))

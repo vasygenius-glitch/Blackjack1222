@@ -208,9 +208,6 @@ async def cmd_work(message: types.Message):
     data = await get_user_data(chat_id, user_id, full_name)
     if data.get('is_banned', False):
         return await message.answer("Ты в бане и не можешь работать.")
-        
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Вы — уважаемый Банкир. Черная работа не для вас.")
 
     last_work = data.get('last_work_time', 0)
     current_time = time.time()
@@ -225,6 +222,12 @@ async def cmd_work(message: types.Message):
     rand = secrets.SystemRandom()
     base_earnings = rand.randint(500, 1500)
     
+    if data.get('is_banker', False):
+        # Доход банкиров от работы урезан до 10-20%
+        base_earnings = int(base_earnings * 0.15)
+        if base_earnings < 1:
+            base_earnings = 1
+
     # --- БОНУС ПИТОМЦА ---
     pet = data.get('pet')
     pet_id = pet.get('id') if pet else None
@@ -308,7 +311,7 @@ async def cmd_crime(message: types.Message):
         return await message.answer("Ты в бане и не можешь совершать преступления.")
         
     if data.get('is_banker', False):
-        return await message.answer("🏦 Вы — уважаемый Банкир. Воровать не по статусу.")
+        return await message.answer("🏦 Вы — уважаемый Банкир. Воровать не по статусу. (Крайм отключен для банкиров)")
 
     last_crime = data.get('last_crime_time', 0)
     current_time = time.time()

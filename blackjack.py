@@ -40,9 +40,6 @@ async def cmd_bj(message: types.Message):
         await message.answer("Вы забанены и не можете играть.")
         return
 
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Уважаемый Банкир, вам не по статусу играть в казино. Ваше дело — управлять капиталом.")
-
     args = message.text.split()
     if len(args) < 2:
         await message.answer("Укажите ставку: <code>/bj 100</code>")
@@ -81,8 +78,13 @@ async def cmd_bj(message: types.Message):
     if player_score == 21:
         profit = int(bet * 1.5)
         is_vip = data.get('is_vip', False)
+        is_banker = data.get('is_banker', False)
         vip_bonus_text = ""
-        if is_vip:
+
+        if is_banker:
+            profit = int(profit * 0.5)
+            vip_bonus_text = f" (🏦 Банкирам выплачивается только 50% от прибыли)"
+        elif is_vip:
             vip_profit_bonus = int(profit * 0.1)
             profit += vip_profit_bonus
             vip_bonus_text = f" (👑 VIP бонус: +{vip_profit_bonus})"
@@ -199,11 +201,16 @@ async def finish_dealer_turn(callback: types.CallbackQuery, game: dict):
 
     data = await get_user_data(chat_id, user_id)
     is_vip = data.get('is_vip', False)
+    is_banker = data.get('is_banker', False)
 
     if dealer_score > 21 or player_score > dealer_score:
         profit = bet
         vip_bonus_text = ""
-        if is_vip:
+
+        if is_banker:
+            profit = int(profit * 0.5)
+            vip_bonus_text = f" (🏦 Банкирам выплачивается только 50% от прибыли)"
+        elif is_vip:
             vip_profit_bonus = int(profit * 0.1)
             profit += vip_profit_bonus
             vip_bonus_text = f" (👑 VIP бонус: +{vip_profit_bonus})"

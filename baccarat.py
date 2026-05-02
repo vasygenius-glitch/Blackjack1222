@@ -38,9 +38,6 @@ async def cmd_baccarat(message: types.Message):
     user_id = message.from_user.id
     data = await get_user_data(chat_id, user_id)
 
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Уважаемый Банкир, вам не по статусу играть в казино. Ваше дело — управлять капиталом.")
-
     if data.get('balance', 0) - bet < -5000:
         return await message.answer("Ваш кредитный лимит (-5000) исчерпан. Пополните баланс.")
 
@@ -65,8 +62,16 @@ async def cmd_baccarat(message: types.Message):
     text = f"🃏 <b>Баккара</b>\n\nОчки Игрока: <b>{p_score}</b>\nОчки Банкира: <b>{b_score}</b>\n\n"
 
     if p_score > b_score:
-        await update_user_balance(chat_id, user_id, bet)
-        text += f"🎉 Игрок побеждает! Вы выиграли <b>{bet}</b> сыроежек."
+        profit = bet
+        is_banker = data.get('is_banker', False)
+        vip_bonus_text = ""
+
+        if is_banker:
+            profit = int(profit * 0.5)
+            vip_bonus_text = f"\n<i>(🏦 Банкирам выплачивается только 50% от прибыли)</i>"
+
+        await update_user_balance(chat_id, user_id, profit)
+        text += f"🎉 Игрок побеждает! Вы выиграли <b>{profit}</b> сыроежек.{vip_bonus_text}"
     elif b_score > p_score:
         await update_user_balance(chat_id, user_id, -bet)
         text += f"❌ Банкир побеждает! Вы проиграли <b>{bet}</b> сыроежек."

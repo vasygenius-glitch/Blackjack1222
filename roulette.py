@@ -32,9 +32,6 @@ async def cmd_roulette(message: types.Message):
     if data.get('is_banned', False):
         return await message.answer("Вы забанены и не можете играть.")
 
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Уважаемый Банкир, вам не по статусу играть в казино. Ваше дело — управлять капиталом.")
-
     args = message.text.split()
     if len(args) < 3:
         await message.answer("Использование: <code>/roulette <ставка> <число от 1 до 36></code>\nПример: <code>/roulette 100 15</code>")
@@ -102,8 +99,13 @@ async def cmd_roulette(message: types.Message):
     if total_win > 0:
         profit = total_win - bet
         is_vip = data.get('is_vip', False)
+        is_banker = data.get('is_banker', False)
         vip_bonus_text = ""
-        if is_vip:
+
+        if is_banker:
+            profit = int(profit * 0.5)
+            vip_bonus_text = f" (🏦 Банкирам выплачивается только 50% от прибыли)"
+        elif is_vip:
             vip_profit_bonus = int(profit * 0.1)
             profit += vip_profit_bonus
             vip_bonus_text = f" (👑 VIP бонус: +{vip_profit_bonus})"
