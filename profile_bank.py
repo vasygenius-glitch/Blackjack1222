@@ -92,10 +92,14 @@ async def cmd_bank(message: types.Message):
     chat_id = message.chat.id
     user_id = message.from_user.id
 
+    data = await get_user_data(chat_id, user_id)
+    current_deposit = data.get('bank_deposit', 0)
+
     args = message.text.split()
     if len(args) < 2:
         return await message.answer(
             "🏦 <b>Банк Сыроежек</b>\n\n"
+            f"Ваш вклад: <b>{current_deposit}</b> сыроежек.\n\n"
             "Минимальный вклад: 10.000.000\n"
             "Команды:\n"
             "<code>/bank deposit [сумма]</code>\n"
@@ -109,9 +113,6 @@ async def cmd_bank(message: types.Message):
         amount = int(args[2])
         if amount <= 0: return
     except: return
-
-    data = await get_user_data(chat_id, user_id)
-    current_deposit = data.get('bank_deposit', 0)
 
     if action == "deposit":
         if amount < 10000000 and current_deposit == 0:
@@ -127,8 +128,8 @@ async def cmd_bank(message: types.Message):
         if current_deposit < amount:
             return await message.answer(f"В банке только {current_deposit} сыроежек.")
 
-        await update_user_field(chat_id, user_id, 'bank_deposit', current_deposit - amount)
         await update_user_balance(chat_id, user_id, amount)
+        await update_user_field(chat_id, user_id, 'bank_deposit', current_deposit - amount)
         await message.answer(f"💸 Снято {amount} сыроежек со счета.")
 
 @router.message(Command("bank_stats"))
