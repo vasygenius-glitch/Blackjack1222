@@ -3,7 +3,7 @@ from aiogram.filters import Command
 import secrets
 import time
 from economy_utils import get_global_tax
-from user_manager import get_user_data, update_user_balance, check_and_give_bonus, update_user_field, get_top_users
+from user_manager import get_user_data, update_user_balance, check_and_give_bonus, update_user_field, get_top_users, get_all_users_in_chat
 from escape import escape_html
 
 router = Router()
@@ -144,23 +144,36 @@ async def cmd_pay(message: types.Message):
         await message.answer(f"Мало денег. Для перевода {amount} нужно {total_cost} сыроежек (налог {tax_percent}% - минимум 1 сыр.).")
         return
 
-    try:
-        admins = await message.chat.get_administrators()
-        human_admins =[admin.user.id for admin in admins if not admin.user.is_bot]
-    except Exception:
-        human_admins =[]
+    # Ищем банкиров в чате (SWIFT система)
+    docs = await get_all_users_in_chat(chat_id)
+    bankers = []
+    for doc in docs:
+        udata = doc.to_dict()
+        if udata.get('is_banker', False):
+            bankers.append(doc.id)
 
     await update_user_balance(chat_id, sender_id, -total_cost)
 
     await get_user_data(chat_id, target_user.id, target_name)
     await update_user_balance(chat_id, target_user.id, amount)
 
-    if human_admins and commission > 0:
-        commission_per_admin = commission // len(human_admins)
-        if commission_per_admin > 0:
-            for admin_id in human_admins:
-                await get_user_data(chat_id, admin_id)
-                await update_user_balance(chat_id, admin_id, commission_per_admin)
+    if commission > 0:
+        if bankers:
+            import random
+            random_banker = random.choice(bankers)
+            await update_user_balance(chat_id, int(random_banker), commission)
+        else:
+            try:
+                admins = await message.chat.get_administrators()
+                human_admins =[admin.user.id for admin in admins if not admin.user.is_bot]
+            except Exception:
+                human_admins =[]
+            if human_admins:
+                commission_per_admin = commission // len(human_admins)
+                if commission_per_admin > 0:
+                    for admin_id in human_admins:
+                        await get_user_data(chat_id, admin_id)
+                        await update_user_balance(chat_id, admin_id, commission_per_admin)
 
     phrases =[
         f"Налоговая откусила кусок в {commission} сыроежек.",
@@ -186,14 +199,23 @@ async def cmd_bonus(message: types.Message):
 
     success, receipt = await check_and_give_bonus(chat_id, user_id, full_name)
     if success:
-        text = f"🧾 <b>Квитанция о доходах</b>\n\n"
-        if receipt.get('base', 0) > 0:
-            text += f"🎁 Ежедневный бонус: <b>{receipt['base']}</b>\n"
-        text += f"🏢 Доход с бизнесов: <b>{receipt['business']}</b>\n"
-        text += f"🚗 Доход с машин: <b>{receipt['car']}</b>\n"
-        text += f"➖ Налог ({receipt['tax_percent']}%): <b>-{receipt['tax_amount']}</b>\n"
-        text += f"-----------------------\n"
-        text += f"💰 Итого на руки: <b>{receipt['total']}</b> сыроежек"
+        if receipt.get('is_banker_bonus'):
+            text = f"🏦 <b>Субсидия Центрального Банка</b>\n\n"
+            text += f"💼 Базовая субсидия + % с кредитов: <b>{receipt['total']}</b> сыр.\n"
+            text += f"➖ Взнос в Страховой Фонд учтен.\n"
+            text += f"💰 Итого переведено: <b>{receipt['total']}</b> сыроежек"
+        else:
+            text = f"🧾 <b>Квитанция о доходах</b>\n\n"
+            if receipt.get('base', 0) > 0:
+                text += f"🎁 Ежедневный бонус: <b>{receipt['base']}</b>\n"
+            text += f"🏢 Доход с бизнесов: <b>{receipt['business']}</b>\n"
+            text += f"🚗 Доход с машин: <b>{receipt['car']}</b>\n"
+            text += f"➖ Налог ({receipt['tax_percent']}%): <b>-{receipt['tax_amount']}</b>\n"
+            text += f"-----------------------\n"
+            text += f"💰 Итого на руки: <b>{receipt['total']}</b> сыроежек"
+
+            if receipt.get('seized_assets_msg'):
+                text += receipt['seized_assets_msg']
 
         await message.answer(text)
     else:

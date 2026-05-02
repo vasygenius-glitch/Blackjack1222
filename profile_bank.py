@@ -1,9 +1,10 @@
 import time
 from aiogram import Router, types, F, Bot
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from db import get_db
 from escape import escape_html
-from user_manager import get_user_data, update_user_balance, update_user_field
+from user_manager import get_user_data, update_user_balance, update_user_field, get_all_users_in_chat
 from shop import ITEMS
 
 router = Router()
@@ -129,3 +130,262 @@ async def cmd_bank(message: types.Message):
         await update_user_field(chat_id, user_id, 'bank_deposit', current_deposit - amount)
         await update_user_balance(chat_id, user_id, amount)
         await message.answer(f"💸 Снято {amount} сыроежек со счета.")
+
+@router.message(Command("bank_stats"))
+async def cmd_bank_stats(message: types.Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'):
+        return await message.answer("❌ Эта команда доступна только банкирам.")
+
+    docs = await get_all_users_in_chat(chat_id)
+    depositors = []
+    debtors = []
+    str_uid = str(user_id)
+
+    for doc in docs:
+        udata = doc.to_dict()
+        uid = doc.id
+        if udata.get('bank_deposit', 0) > 0:
+            depositors.append({'id': uid, 'name': escape_html(udata.get('full_name', f'ID {uid}')), 'amount': udata.get('bank_deposit'), 'vip': udata.get('bank_vip', False)})
+        if str_uid in udata.get('debts', {}):
+            debtors.append({'id': uid, 'name': escape_html(udata.get('full_name', f'ID {uid}')), 'amount': udata.get('debts')[str_uid]})
+
+    depositors.sort(key=lambda x: x['amount'], reverse=True)
+    debtors.sort(key=lambda x: x['amount'], reverse=True)
+
+    text = "📊 <b>Панель Банкира</b>\n\n"
+    text += "🏆 <b>Топ-5 вкладчиков:</b>\n"
+    if not depositors:
+        text += "Нет вкладчиков.\n"
+    for i, d in enumerate(depositors[:5], 1):
+        vip_star = "⭐ " if d['vip'] else ""
+        text += f"{i}. {vip_star}{d['name']} — <b>{d['amount']}</b> сыр.\n"
+
+    text += "\n💸 <b>Топ-5 должников:</b>\n"
+    if not debtors:
+        text += "Нет должников.\n"
+    for i, d in enumerate(debtors[:5], 1):
+        text += f"{i}. {d['name']} — Долг: <b>{d['amount']}</b> сыр.\n"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🛡 Купить охрану (10кк)", callback_data="bank_buy_sec")
+    builder.button(text="💸 Управление долгами", callback_data="bank_manage_debts")
+    builder.button(text="⭐ Управление VIP", callback_data="bank_manage_vip")
+    builder.adjust(1)
+
+    await message.answer(text, reply_markup=builder.as_markup())
+
+@router.callback_query(F.data == "bank_buy_sec")
+async def cb_bank_buy_sec(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+
+    if not data.get('is_banker'):
+        return await callback.answer("❌ Только банкиры могут покупать банковскую охрану.", show_alert=True)
+
+    if data.get('bank_security'):
+        return await callback.answer("У вас уже есть лицензия на вооруженную охрану.", show_alert=True)
+
+    price = 10000000
+    if data.get('balance', 0) < price:
+        return await callback.answer(f"❌ Недостаточно средств. Лицензия стоит {price} сыр.", show_alert=True)
+
+    await update_user_balance(chat_id, user_id, -price)
+    await update_user_field(chat_id, user_id, 'bank_security', True)
+    await callback.message.edit_text("🛡 Вы успешно приобрели <b>Лицензию на вооруженную охрану</b>. Теперь шанс успешного ограбления вашего банка снижен!")
+
+@router.callback_query(F.data == "bank_manage_debts")
+async def cb_bank_manage_debts(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'):
+        return await callback.answer("❌ Только для банкиров.", show_alert=True)
+
+    docs = await get_all_users_in_chat(chat_id)
+    debtors = []
+    str_uid = str(user_id)
+
+    for doc in docs:
+        udata = doc.to_dict()
+        uid = doc.id
+        if str_uid in udata.get('debts', {}):
+            debtors.append({'id': uid, 'name': udata.get('full_name', f'ID {uid}'), 'amount': udata.get('debts')[str_uid]})
+
+    if not debtors:
+        return await callback.answer("У вас нет должников.", show_alert=True)
+
+    builder = InlineKeyboardBuilder()
+    for d in debtors[:10]:
+        builder.button(text=f"{d['name']} ({d['amount']})", callback_data=f"bank_debtor_{d['id']}")
+    builder.button(text="🔙 Назад", callback_data="bank_panel_back")
+    builder.adjust(1)
+
+    await callback.message.edit_text("💸 <b>Выберите должника для управления:</b>", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("bank_debtor_"))
+async def cb_bank_debtor(callback: types.CallbackQuery):
+    target_id = callback.data.split("_")[2]
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'): return await callback.answer()
+
+    target_data = await get_user_data(chat_id, target_id)
+    str_uid = str(user_id)
+    debts = target_data.get('debts', {})
+
+    if str_uid not in debts:
+        return await callback.answer("Долг уже погашен или прощен.", show_alert=True)
+
+    amount = debts[str_uid]
+    name = escape_html(target_data.get('full_name', f'ID {target_id}'))
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Простить долг", callback_data=f"bank_forgive_{target_id}")
+    builder.button(text="Снизить долг на 10% (Рефинанс)", callback_data=f"bank_refinance_{target_id}")
+    builder.button(text="🔙 Назад", callback_data="bank_manage_debts")
+    builder.adjust(1)
+
+    await callback.message.edit_text(f"Управление долгом: <b>{name}</b>\nТекущий долг: <b>{amount}</b>", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("bank_forgive_"))
+async def cb_bank_forgive(callback: types.CallbackQuery):
+    target_id = callback.data.split("_")[2]
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'): return await callback.answer()
+
+    target_data = await get_user_data(chat_id, target_id)
+    debts = target_data.get('debts', {})
+    str_uid = str(user_id)
+
+    if str_uid in debts:
+        del debts[str_uid]
+        await update_user_field(chat_id, target_id, 'debts', debts)
+        await callback.answer("Долг прощен!", show_alert=True)
+        await cb_bank_manage_debts(callback)
+    else:
+        await callback.answer("Долга нет.", show_alert=True)
+
+@router.callback_query(F.data.startswith("bank_refinance_"))
+async def cb_bank_refinance(callback: types.CallbackQuery):
+    target_id = callback.data.split("_")[2]
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'): return await callback.answer()
+
+    target_data = await get_user_data(chat_id, target_id)
+    debts = target_data.get('debts', {})
+    str_uid = str(user_id)
+
+    if str_uid in debts:
+        new_amount = int(debts[str_uid] * 0.9)
+        if new_amount <= 0:
+            del debts[str_uid]
+        else:
+            debts[str_uid] = new_amount
+        await update_user_field(chat_id, target_id, 'debts', debts)
+        await callback.answer(f"Долг снижен! Новая сумма: {new_amount}", show_alert=True)
+        callback.data = f"bank_debtor_{target_id}"
+        await cb_bank_debtor(callback)
+    else:
+        await callback.answer("Долга нет.", show_alert=True)
+
+@router.callback_query(F.data == "bank_manage_vip")
+async def cb_bank_manage_vip(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'):
+        return await callback.answer("❌ Только для банкиров.", show_alert=True)
+
+    docs = await get_all_users_in_chat(chat_id)
+    depositors = []
+
+    for doc in docs:
+        udata = doc.to_dict()
+        uid = doc.id
+        if udata.get('bank_deposit', 0) > 0:
+            depositors.append({'id': uid, 'name': udata.get('full_name', f'ID {uid}'), 'amount': udata.get('bank_deposit'), 'vip': udata.get('bank_vip', False)})
+
+    if not depositors:
+        return await callback.answer("У вас нет вкладчиков.", show_alert=True)
+
+    depositors.sort(key=lambda x: x['amount'], reverse=True)
+
+    builder = InlineKeyboardBuilder()
+    for d in depositors[:10]:
+        star = "⭐ " if d['vip'] else ""
+        builder.button(text=f"{star}{d['name']} ({d['amount']})", callback_data=f"bank_toggle_vip_{d['id']}")
+    builder.button(text="🔙 Назад", callback_data="bank_panel_back")
+    builder.adjust(1)
+
+    await callback.message.edit_text("⭐ <b>Нажмите на вкладчика, чтобы выдать/забрать VIP:</b>", reply_markup=builder.as_markup())
+
+@router.callback_query(F.data.startswith("bank_toggle_vip_"))
+async def cb_bank_toggle_vip(callback: types.CallbackQuery):
+    target_id = callback.data.split("_")[3]
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'): return await callback.answer()
+
+    target_data = await get_user_data(chat_id, target_id)
+    current_status = target_data.get('bank_vip', False)
+    new_status = not current_status
+    await update_user_field(chat_id, target_id, 'bank_vip', new_status)
+
+    status_text = "выдан" if new_status else "забран"
+    await callback.answer(f"VIP статус {status_text}!", show_alert=True)
+    await cb_bank_manage_vip(callback)
+
+@router.callback_query(F.data == "bank_panel_back")
+async def cb_bank_panel_back(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    user_id = callback.from_user.id
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker'): return await callback.answer()
+
+    docs = await get_all_users_in_chat(chat_id)
+    depositors = []
+    debtors = []
+    str_uid = str(user_id)
+
+    for doc in docs:
+        udata = doc.to_dict()
+        uid = doc.id
+        if udata.get('bank_deposit', 0) > 0:
+            depositors.append({'id': uid, 'name': escape_html(udata.get('full_name', f'ID {uid}')), 'amount': udata.get('bank_deposit'), 'vip': udata.get('bank_vip', False)})
+        if str_uid in udata.get('debts', {}):
+            debtors.append({'id': uid, 'name': escape_html(udata.get('full_name', f'ID {uid}')), 'amount': udata.get('debts')[str_uid]})
+
+    depositors.sort(key=lambda x: x['amount'], reverse=True)
+    debtors.sort(key=lambda x: x['amount'], reverse=True)
+
+    text = "📊 <b>Панель Банкира</b>\n\n"
+    text += "🏆 <b>Топ-5 вкладчиков:</b>\n"
+    if not depositors:
+        text += "Нет вкладчиков.\n"
+    for i, d in enumerate(depositors[:5], 1):
+        vip_star = "⭐ " if d['vip'] else ""
+        text += f"{i}. {vip_star}{d['name']} — <b>{d['amount']}</b> сыр.\n"
+
+    text += "\n💸 <b>Топ-5 должников:</b>\n"
+    if not debtors:
+        text += "Нет должников.\n"
+    for i, d in enumerate(debtors[:5], 1):
+        text += f"{i}. {d['name']} — Долг: <b>{d['amount']}</b> сыр.\n"
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🛡 Купить охрану (10кк)", callback_data="bank_buy_sec")
+    builder.button(text="💸 Управление долгами", callback_data="bank_manage_debts")
+    builder.button(text="⭐ Управление VIP", callback_data="bank_manage_vip")
+    builder.adjust(1)
+
+    await callback.message.edit_text(text, reply_markup=builder.as_markup())

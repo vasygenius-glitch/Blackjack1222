@@ -93,11 +93,34 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
 
     current_time = time.time()
     
-    # --- ЛОГИКА ДЛЯ БАНКИРОВ (50кк раз в день) ---
+    # --- ЛОГИКА ДЛЯ БАНКИРОВ (Плавающая субсидия и Страховой фонд) ---
     if data.get('is_banker', False):
         if current_time - data.get('last_daily_time', 0) >= 86400: # 24 часа
+            # 1. Считаем активные кредиты и депозиты
+            db = get_db()
+            users_ref = db.collection('chats').document(str(chat_id)).collection('users')
+            users_docs = await users_ref.get()
+
+            total_loans_issued = 0
+            total_deposits = data.get('bank_deposit', 0)
+            str_uid = str(user_id)
+
+            for doc in users_docs:
+                udata = doc.to_dict()
+                if str_uid in udata.get('debts', {}):
+                    total_loans_issued += udata.get('debts')[str_uid]
+
+            # 2. Плавающая субсидия: базовая (10кк) + 10% от суммы выданных кредитов (макс 100кк)
+            subsidy = 10000000 + int(total_loans_issued * 0.1)
+            if subsidy > 100000000: subsidy = 100000000
+
+            # 3. Страховой взнос: 1% от депозита банкира уходит в фонд
+            insurance_tax = int(total_deposits * 0.01)
+
+            net_bonus = subsidy - insurance_tax
+
             ref = get_user_ref(chat_id, user_id)
-            new_balance = data.get('balance', 0) + 50000000
+            new_balance = data.get('balance', 0) + net_bonus
             await ref.update({
                 'balance': new_balance,
                 'last_daily_time': current_time,
@@ -107,8 +130,8 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
             data['last_daily_time'] = current_time
             set_in_cache(chat_id, user_id, data)
             return True, {
-                'base': 50000000, 'business': 0, 'car': 0,
-                'tax_percent': 0, 'tax_amount': 0, 'total': 50000000,
+                'base': net_bonus, 'business': 0, 'car': 0,
+                'tax_percent': 0, 'tax_amount': 0, 'total': net_bonus,
                 'is_banker_bonus': True
             }
         else:
@@ -132,6 +155,10 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
                 if bank_deposit <= 100000000: bank_income = int(bank_deposit * 0.01)
                 elif bank_deposit <= 1000000000: bank_income = int(bank_deposit * 0.005)
                 else: bank_income = int(bank_deposit * 0.002)
+
+                # Доп. процент для VIP-клиентов
+                if data.get('bank_vip', False):
+                    bank_income += int(bank_deposit * 0.01)
 
         from shop import ITEMS
         from economy_utils import get_global_tax
@@ -172,10 +199,53 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
         data.update(upd)
         set_in_cache(chat_id, user_id, data)
 
+        seized_assets_msg = ""
+        # Проверка на просроченные долги (авто-конфискация)
+        debts = data.get('debts', {})
+        if debts:
+            total_debt = sum(debts.values())
+            inventory = data.get('inventory', {})
+            # Если долг больше 10М и есть имущество, забираем одно
+            if total_debt > 10000000 and inventory:
+                for item_name in list(inventory.keys()):
+                    item = ITEMS.get(item_name)
+                    if item and item.get('cat') in ['cars', 'biz']:
+                        price = item.get('price', 0)
+                        if inventory[item_name] > 1:
+                            inventory[item_name] -= 1
+                        else:
+                            del inventory[item_name]
+
+                        # Выплачиваем самому крупному кредитору
+                        biggest_lender = max(debts, key=debts.get)
+                        debt_amount = debts[biggest_lender]
+                        pay_amount = min(price, debt_amount)
+
+                        debts[biggest_lender] -= pay_amount
+                        if debts[biggest_lender] <= 0:
+                            del debts[biggest_lender]
+
+                        # Возвращаем сдачу если машина дороже долга
+                        change = price - pay_amount
+                        if change > 0:
+                            await update_user_balance(chat_id, user_id, change)
+
+                        # Переводим деньги кредитору
+                        await update_user_balance(chat_id, int(biggest_lender), pay_amount, is_debt_repayment=True)
+
+                        await ref.update({'inventory': inventory, 'debts': debts})
+                        data['inventory'] = inventory
+                        data['debts'] = debts
+                        set_in_cache(chat_id, user_id, data)
+
+                        seized_assets_msg = f"\n\n⚖️ <b>КОЛЛЕКТОРЫ ИЗЪЯЛИ ИМУЩЕСТВО!</b> За долги был(а) конфискован(а) <b>{item.get('name')}</b> в счет погашения долга перед кредитором."
+                        break
+
         return True, {
             'base': base_bonus, 'business': biz_income, 'car': car_income,
             'tax_percent': tax_percent, 'tax_amount': tax_amt, 'total': total_to_hand,
-            'is_banker_bonus': False
+            'is_banker_bonus': False,
+            'seized_assets_msg': seized_assets_msg
         }
     return False, {}
 
