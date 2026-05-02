@@ -531,6 +531,29 @@ async def cmd_crypto_main(message: types.Message):
     if await check_ban(message.chat.id, message.from_user.id): 
         return
         
+    from user_manager import get_user_data
+    data = await get_user_data(message.chat.id, message.from_user.id)
+    if data.get('is_banker', False):
+        return await message.answer("🏦 Уважаемый Банкир, вам запрещено играть на бирже.")
+
+    debts = data.get('debts', {})
+
+    import time
+    current_time = time.time()
+    has_overdue_debt = False
+
+    for k, v in debts.items():
+        if k.startswith("bank_") and v > 0:
+            parts = k.split("_")
+            if len(parts) >= 3:
+                due_date = int(parts[2])
+                if current_time > due_date:
+                    has_overdue_debt = True
+                    break
+
+    if has_overdue_debt:
+        return await message.answer("❌ Ваш счет заблокирован за просроченный долг перед банком!")
+
     await message.answer("📊 <b>SYROEZHKA CRYPTO EXCHANGE</b>\n\nВыбери раздел:", reply_markup=get_crypto_main_kb())
 
 @router.callback_query(F.data == "crypto_main")

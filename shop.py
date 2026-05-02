@@ -1,5 +1,6 @@
 from aiogram import Router, F, types
 from aiogram.filters import Command
+import time
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from user_manager import get_user_data, update_user_balance, add_item_to_inventory, update_user_field
 from escape import escape_html
@@ -57,6 +58,24 @@ def get_category_kb(category):
 @router.message(Command("shop"))
 async def cmd_shop(message: types.Message):
     data = await get_user_data(message.chat.id, message.from_user.id)
+
+    debts = data.get('debts', {})
+
+    current_time = time.time()
+    has_overdue_debt = False
+
+    for k, v in debts.items():
+        if k.startswith("bank_") and v > 0:
+            parts = k.split("_")
+            if len(parts) >= 3:
+                due_date = int(parts[2])
+                if current_time > due_date:
+                    has_overdue_debt = True
+                    break
+
+    if has_overdue_debt:
+        return await message.answer("❌ На вас наложен арест! У вас есть просроченный долг перед банком. Покупки запрещены.")
+
     if data.get('is_banned'): return
     
     text = (
@@ -91,10 +110,6 @@ async def process_buy(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     user_id = callback.from_user.id
     data = await get_user_data(chat_id, user_id)
-
-    # Запрещаем банкирам покупать бизнесы и машины
-    if data.get('is_banker', False) and item.get('cat') in ['biz', 'cars']:
-        return await callback.answer("🏦 Банкирам запрещено приобретать сторонний бизнес и транспорт!", show_alert=True)
 
     if data.get('balance', 0) < item['price']:
         return await callback.answer("Недостаточно денег!", show_alert=True)

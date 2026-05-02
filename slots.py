@@ -32,8 +32,7 @@ async def cmd_slots(message: types.Message):
 
     data = await get_user_data(chat_id, user_id, full_name)
     if data.get('is_banned', False):
-        await message.answer("Вы забанены и не можете играть.")
-        return
+        return await message.answer("Вы забанены и не можете играть.")
 
     args = message.text.split()
     if len(args) < 2:
@@ -161,10 +160,14 @@ async def cmd_slots(message: types.Message):
 
     result_text = ""
     is_vip = data.get('is_vip', False)
+    is_banker = data.get('is_banker', False)
     vip_bonus_text = ""
 
     if profit > 0:
-        if is_vip:
+        if is_banker:
+            profit = int(profit * 0.5)
+            vip_bonus_text = f" (🏦 Банкирам выплачивается только 50% от прибыли)"
+        elif is_vip:
             vip_profit_bonus = int(profit * 0.1)
             profit += vip_profit_bonus
             vip_bonus_text = f" (👑 VIP бонус: +{vip_profit_bonus})"

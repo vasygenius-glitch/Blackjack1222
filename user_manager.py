@@ -93,28 +93,6 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
 
     current_time = time.time()
     
-    # --- ЛОГИКА ДЛЯ БАНКИРОВ (50кк раз в день) ---
-    if data.get('is_banker', False):
-        if current_time - data.get('last_daily_time', 0) >= 86400: # 24 часа
-            ref = get_user_ref(chat_id, user_id)
-            new_balance = data.get('balance', 0) + 50000000
-            await ref.update({
-                'balance': new_balance,
-                'last_daily_time': current_time,
-                'last_bonus_time': current_time
-            })
-            data['balance'] = new_balance
-            data['last_daily_time'] = current_time
-            set_in_cache(chat_id, user_id, data)
-            return True, {
-                'base': 50000000, 'business': 0, 'car': 0,
-                'tax_percent': 0, 'tax_amount': 0, 'total': 50000000,
-                'is_banker_bonus': True
-            }
-        else:
-            return False, {}
-    # ---------------------------------------------
-
     last_bonus = data.get('last_bonus_time', 0)
 
     if current_time - last_bonus >= 3600:
@@ -125,10 +103,10 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
         # ФИКСИРОВАННЫЙ БОНУС ДЛЯ ВСЕХ (без налогов на эту сумму)
         base_bonus = 1000 
 
-        # Ежедневные проценты по старым вкладам
+        # Ежедневные проверки (проценты по старым системным вкладам, не привязанным к банкам)
         if current_time - data.get('last_daily_time', 0) >= 79200:
             is_daily = True
-            if bank_deposit > 0:
+            if bank_deposit > 0 and not data.get('bank_name'):
                 if bank_deposit <= 100000000: bank_income = int(bank_deposit * 0.01)
                 elif bank_deposit <= 1000000000: bank_income = int(bank_deposit * 0.005)
                 else: bank_income = int(bank_deposit * 0.002)
@@ -152,6 +130,11 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
             elif item.get('action') == 'car':
                 car_income += item.get('income', 0) * count
 
+        if data.get('is_banker', False):
+            # Доходы банкиров от бизнесов и машин урезаны до 10%
+            biz_income = int(biz_income * 0.1)
+            car_income = int(car_income * 0.1)
+
         extra_income = biz_income + car_income + bank_income
         tax_amt = int(extra_income * (tax_percent / 100.0))
         total_to_hand = base_bonus + extra_income - tax_amt
@@ -165,7 +148,7 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
         }
         if is_daily:
             upd['last_daily_time'] = current_time
-            if bank_deposit > 0:
+            if bank_deposit > 0 and not data.get('bank_name'):
                 upd['bank_deposit'] = bank_deposit + bank_income
 
         await ref.update(upd)

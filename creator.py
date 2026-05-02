@@ -18,7 +18,7 @@ def is_creator(message: types.Message):
 
 # ================= БАНКИРЫ И СОФТ-ВАЙП =================
 
-@router.message(Command("setbanker"))
+@router.message(Command("setbankir"))
 async def cmd_setbanker(message: types.Message):
     if not is_creator(message):
         return
@@ -33,9 +33,9 @@ async def cmd_setbanker(message: types.Message):
     await get_user_data(chat_id, target_id, target_name)
     await update_user_field(chat_id, target_id, 'is_banker', True)
     
-    await message.answer(f"💼 Пользователь <b>{target_name}</b> назначен официальным <b>Банкиром</b>!\nТеперь у него нет доступа к казино и работам, но он получает 50.000.000 в день и может кредитовать игроков.")
+    await message.answer(f"💼 Пользователь <b>{target_name}</b> назначен официальным <b>Банкиром</b>!\nТеперь у него нет доступа к казино и работам, но он сможет создать свой банк и выдавать кредиты игрокам.")
 
-@router.message(Command("delbanker"))
+@router.message(Command("delbankir"))
 async def cmd_delbanker(message: types.Message):
     if not is_creator(message):
         return
@@ -50,7 +50,14 @@ async def cmd_delbanker(message: types.Message):
     await get_user_data(chat_id, target_id, target_name)
     await update_user_field(chat_id, target_id, 'is_banker', False)
     
-    await message.answer(f"❌ Пользователь <b>{target_name}</b> снят с должности Банкира и возвращен к обычной жизни.")
+    # Также закрываем его банк, если он был
+    db = get_db()
+    bank_ref = db.collection('chats').document(str(chat_id)).collection('banks').document(str(target_id))
+    doc = await bank_ref.get()
+    if doc.exists:
+        await bank_ref.delete()
+
+    await message.answer(f"❌ Пользователь <b>{target_name}</b> снят с должности Банкира. Его банк был закрыт.")
 
 @router.message(Command("wipe_balances"))
 async def cmd_wipe_balances(message: types.Message):
@@ -60,14 +67,14 @@ async def cmd_wipe_balances(message: types.Message):
     args = message.text.split()
     if len(args) < 2 or args[1] != "CONFIRM":
         return await message.answer(
-            "⚠️ <b>ВНИМАНИЕ! СОФТ-ВАЙП ЭКОНОМИКИ (ТОЛЬКО ДЕНЬГИ)!</b> ⚠️\n\n"
-            "Это действие обнулит ТОЛЬКО балансы и вклады всех игроков до 500 сыроежек.\n"
-            "💼 <b>Сохранятся:</b> Машины, бизнесы, питомцы, крипта, кланы, скиллы и долги.\n\n"
+            "⚠️ <b>ВНИМАНИЕ! СОФТ-ВАЙП ЭКОНОМИКИ (ТОЛЬКО НАЛИЧНЫЕ)!</b> ⚠️\n\n"
+            "Это действие обнулит ТОЛЬКО балансы (наличные на руках) всех игроков до 500 сыроежек.\n"
+            "💼 <b>Сохранятся:</b> Вклады в банке, капитал банков, машины, бизнесы, питомцы, крипта, кланы, скиллы и долги.\n\n"
             "Если вы УВЕРЕНЫ, введите команду:\n"
             "<code>/wipe_balances CONFIRM</code>"
         )
 
-    status_msg = await message.answer("🔄 <i>Начинаю сброс балансов...</i>")
+    status_msg = await message.answer("🔄 <i>Начинаю сброс наличных балансов...</i>")
 
     import time
     from user_manager import _user_cache
@@ -86,17 +93,16 @@ async def cmd_wipe_balances(message: types.Message):
             for doc in user_docs:
                 doc_id = getattr(doc, 'id', None)
                 if doc_id:
-                    # Обнуляем только деньги
+                    # Обнуляем только баланс
                     await users_ref.document(doc_id).set({
-                        'balance': 500,
-                        'bank_deposit': 0
+                        'balance': 500
                     }, merge=True)
                     users_wiped += 1
                 
         except Exception as e:
             print(f"Ошибка при софт-вайпе чата {chat_id}: {e}")
 
-    await status_msg.edit_text(f"✅ <b>БАЛАНСЫ УСПЕШНО СБРОШЕНЫ!</b>\n\n👤 Обнулено денег у игроков: <b>{users_wiped}</b>.\nИмущество и инвентари сохранены.")
+    await status_msg.edit_text(f"✅ <b>БАЛАНСЫ УСПЕШНО СБРОШЕНЫ!</b>\n\n👤 Обнулено наличных денег у игроков: <b>{users_wiped}</b>.\nВклады в банках, капитал банков и имущество сохранены.")
 
 # ================= СТАРЫЕ КОМАНДЫ СОЗДАТЕЛЯ =================
 

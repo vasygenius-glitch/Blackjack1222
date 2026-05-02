@@ -43,8 +43,15 @@ async def cmd_dice(message: types.Message):
     text = f"🎲 <b>Игра в кости</b>\n\nВы бросили: <b>{player_roll}</b>\nБот бросил: <b>{bot_roll}</b>\n\n"
 
     if player_roll > bot_roll:
-        await update_user_balance(chat_id, user_id, bet)
-        text += f"🎉 Вы победили! Выиграно: <b>{bet}</b> сыроежек."
+        profit = bet
+        is_banker = data.get('is_banker', False)
+        vip_bonus_text = ""
+        if is_banker:
+            profit = int(profit * 0.5)
+            vip_bonus_text = f"\n<i>(🏦 Банкирам выплачивается только 50% от прибыли)</i>"
+
+        await update_user_balance(chat_id, user_id, profit)
+        text += f"🎉 Вы победили! Выиграно: <b>{profit}</b> сыроежек.{vip_bonus_text}"
     elif player_roll < bot_roll:
         await update_user_balance(chat_id, user_id, -bet)
         text += f"❌ Вы проиграли <b>{bet}</b> сыроежек."
