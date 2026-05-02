@@ -33,7 +33,7 @@ async def cmd_setbanker(message: types.Message):
     await get_user_data(chat_id, target_id, target_name)
     await update_user_field(chat_id, target_id, 'is_banker', True)
     
-    await message.answer(f"💼 Пользователь <b>{target_name}</b> назначен официальным <b>Банкиром</b>!\nТеперь у него нет доступа к казино и работам, но он получает 50.000.000 в день и может кредитовать игроков.")
+    await message.answer(f"💼 Пользователь <b>{target_name}</b> назначен официальным <b>Банкиром</b>!\nТеперь у него есть доступ к панели <code>/bank_stats</code>, плавающей субсидии от ЦБ, доходам от переводов игроков и другим фишкам.")
 
 @router.message(Command("delbanker"))
 async def cmd_delbanker(message: types.Message):

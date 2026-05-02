@@ -47,6 +47,10 @@ async def cmd_steal(message: types.Message, bot: Bot):
     stealth_bonus = data.get('skills', {}).get('stealth', 0) * 0.05
     success_chance = 0.3 + stealth_bonus # Base 30%
 
+    # Защита от ограбления банкиров
+    if target_data.get('is_banker') and target_data.get('bank_security'):
+        success_chance /= 2.0 # Шанс режется в 2 раза
+
     if rand.random() < success_chance:
         steal_amount = int(target_balance * rand.uniform(0.01, 0.05)) # Steal 1-5%
         if steal_amount == 0: steal_amount = 1
@@ -65,4 +69,7 @@ async def cmd_steal(message: types.Message, bot: Bot):
         await update_user_balance(chat_id, user_id, -actual_penalty, is_debt_repayment=True)
         await update_user_balance(chat_id, target_id, actual_penalty)
 
-        await message.answer(f"🚨 <b>Провал!</b>\nВас поймали за руку! В качестве компенсации вы отдаете <b>{actual_penalty}</b> сыроежек жертве.")
+        if target_data.get('is_banker') and target_data.get('bank_security'):
+            await message.answer(f"🚨 <b>Провал! Вооруженная охрана банка скрутила вас!</b>\nВ качестве компенсации вы отдаете <b>{actual_penalty}</b> сыроежек в капитал банка.")
+        else:
+            await message.answer(f"🚨 <b>Провал!</b>\nВас поймали за руку! В качестве компенсации вы отдаете <b>{actual_penalty}</b> сыроежек жертве.")
