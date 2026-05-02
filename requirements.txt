@@ -1,0 +1,5 @@
+aiogram>=3.3.0
+firebase-admin>=6.4.0
+python-dotenv>=1.0.0
+flask>=2.0.0
+matplotlib>=3.7.0
