@@ -32,8 +32,10 @@ async def cmd_slots(message: types.Message):
 
     data = await get_user_data(chat_id, user_id, full_name)
     if data.get('is_banned', False):
-        await message.answer("Вы забанены и не можете играть.")
-        return
+        return await message.answer("Вы забанены и не можете играть.")
+
+    if data.get('is_banker', False):
+        return await message.answer("🏦 Уважаемый Банкир, вам не по статусу играть в казино. Ваше дело — управлять капиталом.")
 
     args = message.text.split()
     if len(args) < 2:

@@ -40,6 +40,9 @@ async def cmd_bj(message: types.Message):
         await message.answer("Вы забанены и не можете играть.")
         return
 
+    if data.get('is_banker', False):
+        return await message.answer("🏦 Уважаемый Банкир, вам не по статусу играть в казино. Ваше дело — управлять капиталом.")
+
     args = message.text.split()
     if len(args) < 2:
         await message.answer("Укажите ставку: <code>/bj 100</code>")

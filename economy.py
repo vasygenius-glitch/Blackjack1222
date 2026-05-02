@@ -246,9 +246,8 @@ async def cmd_work(message: types.Message):
         if debts:
             lender_id_str = secrets.choice(list(debts.keys()))
             debt_amount = debts[lender_id_str]
-            lender_id = int(lender_id_str)
-            lender_data = await get_user_data(chat_id, lender_id)
-            lender_name = lender_data.get('full_name', 'Неизвестный кредитор')
+
+            is_bank = lender_id_str.startswith("bank_")
 
             collector_cut = int(base_earnings * 0.5)
             if collector_cut == 0: collector_cut = 1
@@ -261,9 +260,21 @@ async def cmd_work(message: types.Message):
                     del debts[lender_id_str]
                 
                 await update_user_field(chat_id, user_id, 'debts', debts)
-                await update_user_balance(chat_id, lender_id, pay_amount, is_debt_repayment=True)
                 
-                collector_msg = f"\n\n🦹‍♂️ <b>ЧАСТНЫЕ КОЛЛЕКТОРЫ!</b> Они поджидали тебя и забрали <b>{pay_amount}</b> сыроежек в качестве уплаты долга для <b>{escape_html(lender_name)}</b>."
+                if is_bank:
+                    banker_id = int(lender_id_str.split("_")[1])
+                    from profile_bank import get_bank_info, create_or_update_bank
+                    bank_data = await get_bank_info(chat_id, banker_id)
+                    lender_name = bank_data.get('name', 'Неизвестный Банк') if bank_data else 'Банк'
+                    if bank_data:
+                        await create_or_update_bank(chat_id, banker_id, {'capital': bank_data.get('capital', 0) + pay_amount})
+                    collector_msg = f"\n\n🦹‍♂️ <b>КОЛЛЕКТОРЫ БАНКА!</b> Они поджидали тебя и забрали <b>{pay_amount}</b> сыроежек в качестве уплаты долга для <b>{escape_html(lender_name)}</b>."
+                else:
+                    lender_id = int(lender_id_str)
+                    lender_data = await get_user_data(chat_id, lender_id)
+                    lender_name = lender_data.get('full_name', 'Неизвестный кредитор')
+                    await update_user_balance(chat_id, lender_id, pay_amount, is_debt_repayment=True)
+                    collector_msg = f"\n\n🦹‍♂️ <b>ЧАСТНЫЕ КОЛЛЕКТОРЫ!</b> Они поджидали тебя и забрали <b>{pay_amount}</b> сыроежек в качестве уплаты долга для <b>{escape_html(lender_name)}</b>."
         else:
             penalty = rand.randint(100, 300)
             final_earnings = 0
@@ -334,9 +345,8 @@ async def cmd_crime(message: types.Message):
             if debts:
                 lender_id_str = secrets.choice(list(debts.keys()))
                 debt_amount = debts[lender_id_str]
-                lender_id = int(lender_id_str)
-                lender_data = await get_user_data(chat_id, lender_id)
-                lender_name = lender_data.get('full_name', 'Неизвестный кредитор')
+
+                is_bank = lender_id_str.startswith("bank_")
 
                 collector_cut = int(base_earnings * 0.5)
                 if collector_cut == 0: collector_cut = 1
@@ -349,9 +359,21 @@ async def cmd_crime(message: types.Message):
                         del debts[lender_id_str]
                     
                     await update_user_field(chat_id, user_id, 'debts', debts)
-                    await update_user_balance(chat_id, lender_id, pay_amount, is_debt_repayment=True)
                     
-                    collector_msg = f"\n\n🦹‍♂️ <b>ЧАСТНЫЕ КОЛЛЕКТОРЫ!</b> Они выследили тебя и забрали <b>{pay_amount}</b> сыроежек в счет старого долга для <b>{escape_html(lender_name)}</b>."
+                    if is_bank:
+                        banker_id = int(lender_id_str.split("_")[1])
+                        from profile_bank import get_bank_info, create_or_update_bank
+                        bank_data = await get_bank_info(chat_id, banker_id)
+                        lender_name = bank_data.get('name', 'Неизвестный Банк') if bank_data else 'Банк'
+                        if bank_data:
+                            await create_or_update_bank(chat_id, banker_id, {'capital': bank_data.get('capital', 0) + pay_amount})
+                        collector_msg = f"\n\n🦹‍♂️ <b>КОЛЛЕКТОРЫ БАНКА!</b> Они выследили тебя и забрали <b>{pay_amount}</b> сыроежек в счет старого долга для <b>{escape_html(lender_name)}</b>."
+                    else:
+                        lender_id = int(lender_id_str)
+                        lender_data = await get_user_data(chat_id, lender_id)
+                        lender_name = lender_data.get('full_name', 'Неизвестный кредитор')
+                        await update_user_balance(chat_id, lender_id, pay_amount, is_debt_repayment=True)
+                        collector_msg = f"\n\n🦹‍♂️ <b>ЧАСТНЫЕ КОЛЛЕКТОРЫ!</b> Они выследили тебя и забрали <b>{pay_amount}</b> сыроежек в счет старого долга для <b>{escape_html(lender_name)}</b>."
             else:
                 penalty = rand.randint(200, 500)
                 final_earnings = 0

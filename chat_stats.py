@@ -126,6 +126,27 @@ async def weekly_reset_task(bot: Bot):
     while True:
         await asyncio.sleep(60) # Проверяем каждую минуту
         current_time = time.localtime()
+
+        # --- Ежедневное пополнение капитала банков (Гос. Субсидия) ---
+        if current_time.tm_hour == 0 and current_time.tm_min == 0:
+            db = get_db()
+            from whitelist import get_whitelist
+            whitelist = await get_whitelist()
+            for chat_id in whitelist.keys():
+                try:
+                    banks_ref = db.collection('chats').document(str(chat_id)).collection('banks')
+                    docs = await banks_ref.get()
+                    for doc in docs:
+                        b_data = doc.to_dict()
+                        current_capital = b_data.get('capital', 0)
+                        # Добавляем 50 миллионов
+                        await banks_ref.document(doc.id).update({'capital': current_capital + 50000000})
+                except Exception as e:
+                    print(f"Ошибка пополнения банков в чате {chat_id}: {e}")
+
+            await asyncio.sleep(60) # Чтобы не сработало дважды
+            continue
+
         # Проверяем, является ли день воскресеньем (6) и время 23:59
         if current_time.tm_wday == 6 and current_time.tm_hour == 23 and current_time.tm_min == 59:
             from whitelist import get_whitelist

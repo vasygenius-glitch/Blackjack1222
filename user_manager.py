@@ -93,26 +93,11 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
 
     current_time = time.time()
     
-    # --- ЛОГИКА ДЛЯ БАНКИРОВ (50кк раз в день) ---
+    # --- ЛОГИКА ДЛЯ БАНКИРОВ (Убрана выдача 50кк в карман) ---
     if data.get('is_banker', False):
-        if current_time - data.get('last_daily_time', 0) >= 86400: # 24 часа
-            ref = get_user_ref(chat_id, user_id)
-            new_balance = data.get('balance', 0) + 50000000
-            await ref.update({
-                'balance': new_balance,
-                'last_daily_time': current_time,
-                'last_bonus_time': current_time
-            })
-            data['balance'] = new_balance
-            data['last_daily_time'] = current_time
-            set_in_cache(chat_id, user_id, data)
-            return True, {
-                'base': 50000000, 'business': 0, 'car': 0,
-                'tax_percent': 0, 'tax_amount': 0, 'total': 50000000,
-                'is_banker_bonus': True
-            }
-        else:
-            return False, {}
+        # Банкиры получают 50кк в капитал банка через chat_stats.py, а не на личный баланс.
+        # Поэтому обычный бонус /bonus им недоступен.
+        return False, {}
     # ---------------------------------------------
 
     last_bonus = data.get('last_bonus_time', 0)

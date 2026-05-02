@@ -33,6 +33,9 @@ async def cmd_dice(message: types.Message):
     user_id = message.from_user.id
     data = await get_user_data(chat_id, user_id)
 
+    if data.get('is_banker', False):
+        return await message.answer("🏦 Уважаемый Банкир, вам не по статусу играть в казино. Ваше дело — управлять капиталом.")
+
     if data.get('balance', 0) - bet < -5000:
         return await message.answer("Ваш кредитный лимит (-5000) исчерпан. Пополните баланс.")
 
