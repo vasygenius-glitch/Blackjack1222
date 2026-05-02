@@ -127,22 +127,89 @@ async def weekly_reset_task(bot: Bot):
         await asyncio.sleep(60) # Проверяем каждую минуту
         current_time = time.localtime()
 
-        # --- Ежедневное пополнение капитала банков (Гос. Субсидия) ---
+        # --- Ежедневное пополнение капитала банков и начисление % по вкладам ---
         if current_time.tm_hour == 0 and current_time.tm_min == 0:
             db = get_db()
             from whitelist import get_whitelist
+            from user_manager import update_user_field
             whitelist = await get_whitelist()
             for chat_id in whitelist.keys():
                 try:
+                    # 1. Загружаем все банки в чате
                     banks_ref = db.collection('chats').document(str(chat_id)).collection('banks')
-                    docs = await banks_ref.get()
-                    for doc in docs:
-                        b_data = doc.to_dict()
-                        current_capital = b_data.get('capital', 0)
-                        # Добавляем 50 миллионов
-                        await banks_ref.document(doc.id).update({'capital': current_capital + 50000000})
+                    bank_docs = await banks_ref.get()
+                    banks_data = {doc.id: doc.to_dict() for doc in bank_docs}
+
+                    # 2. Начисляем % всем вкладчикам
+                    users_ref = db.collection('chats').document(str(chat_id)).collection('users')
+                    user_docs = await users_ref.get()
+                    for user_doc in user_docs:
+                        u_data = user_doc.to_dict()
+                        deposit = u_data.get('bank_deposit', 0)
+                        bank_id_str = str(u_data.get('bank_name', ''))
+
+                        if deposit > 0 and bank_id_str in banks_data:
+                            base_rate = banks_data[bank_id_str].get('deposit_rate', 3.0)
+
+                            # Лояльность (бонус за дни)
+                            deposit_start_time = u_data.get('deposit_start_time', current_time.tm_sec)
+                            # Приближенная калькуляция дней
+                            days_held = (time.time() - deposit_start_time) // 86400 if 'deposit_start_time' in u_data else 0
+                            loyalty_bonus = min(5.0, days_held * 0.5) # Максимум +5%
+
+                            final_rate = base_rate + loyalty_bonus
+                            profit = int(deposit * (final_rate / 100))
+
+                            if profit > 0:
+                                # Проверяем, есть ли у банка деньги выплатить %
+                                if banks_data[bank_id_str].get('capital', 0) >= profit:
+                                    banks_data[bank_id_str]['capital'] -= profit
+                                    await update_user_field(chat_id, int(user_doc.id), 'bank_deposit', deposit + profit)
+
+                                    # Оффшорная комиссия (если счет скрытый)
+                                    if u_data.get('is_offshore', False):
+                                        fee = int(deposit * 0.005) # 0.5% за обслуживание оффшора
+                                        new_dep = deposit + profit - fee
+                                        await update_user_field(chat_id, int(user_doc.id), 'bank_deposit', max(0, new_dep))
+
+                    # 3. Обновляем капитал банков (вычитаем выплаченные %, добавляем гос. субсидию 50М, налог на сверхприбыль, банкротство)
+                    for b_id, b_data in banks_data.items():
+                        current_cap = b_data.get('capital', 0)
+
+                        # Банкротство
+                        if current_cap < 0:
+                            # Возвращаем вкладчикам 50% из фонда ЦБ, если банк обанкротился
+                            for user_doc in user_docs:
+                                u_data = user_doc.to_dict()
+                                if str(u_data.get('bank_name', '')) == b_id:
+                                    deposit = u_data.get('bank_deposit', 0)
+                                    if deposit > 0:
+                                        refund = int(deposit * 0.5)
+                                        await update_user_field(chat_id, int(user_doc.id), 'bank_deposit', 0)
+                                        await update_user_balance(chat_id, int(user_doc.id), refund)
+                                        await update_user_field(chat_id, int(user_doc.id), 'bank_name', None)
+                                        try:
+                                            await bot.send_message(chat_id, f"🏛 Банк <b>{b_data.get('name')}</b> обанкротился! ЦБ компенсировал 50% вашего вклада ({refund} сыр.) на наличный счет.")
+                                        except: pass
+
+                            await banks_ref.document(b_id).delete()
+                            await update_user_field(chat_id, int(b_id), 'is_banker', False)
+                            try:
+                                await bot.send_message(chat_id, f"💥 <b>ДЕФОЛТ!</b> Банк <b>{b_data.get('name')}</b> признан банкротом и закрыт. Банкир отстранен.")
+                            except: pass
+                            continue
+
+                        new_capital = current_cap + 50000000
+
+                        # Налог на роскошь (сверхприбыль > 1 млрд)
+                        if new_capital > 1000000000:
+                            luxury_tax = int((new_capital - 1000000000) * 0.05) # 5% с суммы превышающей 1 млрд
+                            new_capital -= luxury_tax
+
+                        await banks_ref.document(b_id).update({'capital': new_capital})
+
                 except Exception as e:
-                    print(f"Ошибка пополнения банков в чате {chat_id}: {e}")
+                    print(f"Ошибка ежедневных банковских операций в чате {chat_id}: {e}")
 
             await asyncio.sleep(60) # Чтобы не сработало дважды
             continue

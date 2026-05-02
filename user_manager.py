@@ -103,10 +103,10 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
         # ФИКСИРОВАННЫЙ БОНУС ДЛЯ ВСЕХ (без налогов на эту сумму)
         base_bonus = 1000 
 
-        # Ежедневные проценты по старым вкладам
+        # Ежедневные проверки (проценты по старым системным вкладам, не привязанным к банкам)
         if current_time - data.get('last_daily_time', 0) >= 79200:
             is_daily = True
-            if bank_deposit > 0:
+            if bank_deposit > 0 and not data.get('bank_name'):
                 if bank_deposit <= 100000000: bank_income = int(bank_deposit * 0.01)
                 elif bank_deposit <= 1000000000: bank_income = int(bank_deposit * 0.005)
                 else: bank_income = int(bank_deposit * 0.002)
@@ -148,7 +148,7 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
         }
         if is_daily:
             upd['last_daily_time'] = current_time
-            if bank_deposit > 0:
+            if bank_deposit > 0 and not data.get('bank_name'):
                 upd['bank_deposit'] = bank_deposit + bank_income
 
         await ref.update(upd)

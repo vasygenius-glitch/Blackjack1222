@@ -69,6 +69,12 @@ async def cmd_profile(message: types.Message):
 
     bank_deposit = data.get('bank_deposit', 0)
 
+    # Скрываем банк если оффшор и мы смотрим чужой профиль
+    if data.get('is_offshore', False) and message.from_user.id != target_id:
+        bank_text = "🏦 В банке: <i>Скрыто (Оффшор)</i>\n\n"
+    else:
+        bank_text = f"🏦 В банке: <b>{bank_deposit}</b> сыр.\n\n"
+
     # Статистика сообщений (из отдельной коллекции)
     db = get_db()
     stats_doc = await db.collection('chats').document(str(chat_id)).collection('stats').document(str(target_id)).get()
@@ -84,7 +90,7 @@ async def cmd_profile(message: types.Message):
         f"Предупреждения: {warns}/3 ⚠️{escort_text}\n"
         f"{debt_display}\n" # Список реальных долгов перед людьми
         f"💰 Баланс: <b>{balance}</b> сыр.\n"
-        f"🏦 В банке: <b>{bank_deposit}</b> сыр.\n\n"
+        f"{bank_text}"
         f"🛡 Клан: {clan}\n"
         f"💍 Брак: {partner_text}\n\n"
         f"🚗 Машин: {cars}\n"
@@ -140,8 +146,9 @@ async def cmd_bank(message: types.Message):
             "<code>/bank info [Название или ID]</code> - Информация о банке\n"
             "<code>/bank list</code> - Список всех банков в чате\n"
             "<code>/bank deposit [сумма] [Название или ID]</code>\n"
-            "<code>/bank withdraw [сумма]</code> - Снять со своего вклада\n\n"
-            "<i>(Вы можете иметь вклад только в одном банке одновременно)</i>"
+            "<code>/bank withdraw [сумма]</code> - Снять со своего вклада\n"
+            "<code>/bank withdraw all</code> - Снять все деньги\n\n"
+            "<i>(Вы можете иметь вклад только в одном банке одновременно.\nКаждый день хранения средств увеличивает ваш процент на +0.5%)</i>"
         )
 
     action = args[1].lower()
@@ -156,8 +163,10 @@ async def cmd_bank(message: types.Message):
         text = "🏦 <b>Список Банков:</b>\n\n"
         for doc in docs:
             b_data = doc.to_dict()
+            rate = b_data.get('deposit_rate', 1.0)
             text += f"🏛 <b>{escape_html(b_data.get('name', 'Банк'))}</b>\n"
             text += f"ID Банкира: <code>{doc.id}</code>\n"
+            text += f"Ставка по вкладу: <b>{rate}%</b> в день\n"
             text += f"Капитал: <b>{b_data.get('capital', 0)}</b> сыр.\n\n"
         return await message.answer(text)
 
@@ -170,8 +179,10 @@ async def cmd_bank(message: types.Message):
         if not bank_data:
             return await message.answer("🏦 Банк не найден.")
 
+        rate = bank_data.get('deposit_rate', 1.0)
         text = f"🏛 <b>{escape_html(bank_data.get('name', 'Банк'))}</b>\n\n"
         text += f"Владелец (ID): <code>{bank_data['banker_id']}</code>\n"
+        text += f"Ставка по вкладу: <b>{rate}%</b> в день\n"
         text += f"Капитал банка: <b>{bank_data.get('capital', 0)}</b> сыр.\n"
         return await message.answer(text)
 
@@ -209,10 +220,19 @@ async def cmd_bank(message: types.Message):
         await update_user_field(chat_id, user_id, 'bank_deposit', current_deposit + amount)
         await update_user_field(chat_id, user_id, 'bank_name', target_banker_id)
 
+        # Запоминаем время вклада (если первый раз или обновляем)
+        if current_deposit == 0:
+            await update_user_field(chat_id, user_id, 'deposit_start_time', int(time.time()))
+
         await create_or_update_bank(chat_id, target_banker_id, {'capital': bank_data.get('capital', 0) + amount})
         await message.answer(f"✅ Депозит пополнен на {amount} сыр. в банке <b>{escape_html(bank_data.get('name'))}</b>.\nВаш общий вклад: {current_deposit + amount}.")
 
     elif action == "withdraw":
+        if args[2].lower() == "all":
+            amount = current_deposit
+            if amount <= 0:
+                return await message.answer("У вас нет средств на банковском счете.")
+
         if current_deposit < amount:
             return await message.answer(f"На вашем вкладе только {current_deposit} сыроежек.")
 
@@ -241,6 +261,7 @@ async def cmd_bank(message: types.Message):
 
         if current_deposit - amount == 0:
             await update_user_field(chat_id, user_id, 'bank_name', None) # Отвязываем от банка
+            await update_user_field(chat_id, user_id, 'deposit_start_time', 0) # Сбрасываем срок лояльности
 
         await message.answer(f"💸 Снято {amount} сыроежек со счета.")
 @router.message(F.text.lower().startswith("создать банк"))
@@ -271,3 +292,110 @@ async def cmd_create_bank(message: types.Message):
     await message.answer(f"🏛 <b>Банк успешно создан!</b>\nНазвание: {bank_name}\nТеперь игроки могут вкладывать деньги в ваш банк с помощью:\n<code>/bank deposit [сумма] {user_id}</code>")
 
 # Удалено снятие прибыли, так как банкиры больше не могут выводить капитал банка напрямую себе
+
+@router.message(Command("bankrate"))
+async def cmd_bank_rate(message: types.Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    args = message.text.split()
+    if len(args) < 2:
+        return await message.answer("Использование: <code>/bankrate [процент 3-13]</code>")
+
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker', False):
+        return await message.answer("❌ Вы не банкир.")
+
+    try:
+        rate = float(args[1])
+        if rate < 3 or rate > 13:
+            return await message.answer("Процент должен быть от 3 до 13.")
+    except ValueError:
+        return await message.answer("Процент должен быть числом.")
+
+    bank_data = await get_bank_info(chat_id, user_id)
+    if not bank_data:
+        return await message.answer("❌ У вас нет открытого банка.")
+
+    await create_or_update_bank(chat_id, user_id, {'deposit_rate': rate})
+    await message.answer(f"📈 Процент по вкладам в вашем банке установлен на <b>{rate}%</b> в день.")
+
+
+@router.message(Command("bank_offshore"))
+async def cmd_bank_offshore(message: types.Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    data = await get_user_data(chat_id, user_id)
+    is_offshore = data.get('is_offshore', False)
+
+    if is_offshore:
+        await update_user_field(chat_id, user_id, 'is_offshore', False)
+        await message.answer("🏝 Вы отключили оффшорный статус. Ваш банковский счет снова виден всем.")
+    else:
+        price = 500000
+        if data.get('balance', 0) < price:
+            return await message.answer(f"❌ Оформление оффшорного счета стоит {price} сыроежек. У вас недостаточно средств.")
+
+        await update_user_balance(chat_id, user_id, -price)
+        await update_user_field(chat_id, user_id, 'is_offshore', True)
+        await message.answer(f"🏝 <b>Оффшорный счет активирован!</b>\nСписано {price} сыр. Теперь ваш вклад скрыт от других игроков в `/profile`.\n<i>(Банк будет снимать 0.5% от вашего депозита при начислении процентов за обслуживание)</i>")
+
+@router.message(Command("bank_stats"))
+async def cmd_bank_stats(message: types.Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    data = await get_user_data(chat_id, user_id)
+    if not data.get('is_banker', False):
+        return await message.answer("❌ Эта команда доступна только банкирам.")
+
+    bank_data = await get_bank_info(chat_id, user_id)
+    if not bank_data:
+        return await message.answer("❌ У вас нет открытого банка.")
+
+    db = get_db()
+
+    # Считаем вклады
+    users_ref = db.collection('chats').document(str(chat_id)).collection('users')
+    user_docs = await users_ref.get()
+
+    total_deposits = 0
+    total_depositors = 0
+    total_loans_given = 0
+    overdue_loans = 0
+
+    import time
+    current_time = time.time()
+
+    for user_doc in user_docs:
+        u_data = user_doc.to_dict()
+
+        if str(u_data.get('bank_name')) == str(user_id):
+            total_deposits += u_data.get('bank_deposit', 0)
+            total_depositors += 1
+
+        debts = u_data.get('debts', {})
+        for k, v in debts.items():
+            if k.startswith(f"bank_{user_id}_") and v > 0:
+                total_loans_given += v
+                parts = k.split("_")
+                if len(parts) >= 3:
+                    due_date = int(parts[2])
+                    if current_time > due_date:
+                        overdue_loans += v
+
+    rate = bank_data.get('deposit_rate', 3.0)
+    capital = bank_data.get('capital', 0)
+
+    text = (
+        f"📊 <b>Панель управления банком: {escape_html(bank_data.get('name'))}</b>\n\n"
+        f"💰 <b>Ликвидность (Капитал):</b> {capital} сыр.\n"
+        f"📈 <b>Ставка по вкладам:</b> {rate}%\n\n"
+        f"👥 <b>Вкладчиков:</b> {total_depositors}\n"
+        f"🏦 <b>Сумма на вкладах:</b> {total_deposits} сыр.\n\n"
+        f"🤝 <b>Раздано кредитов:</b> {total_loans_given} сыр.\n"
+        f"🚨 <b>Просроченных долгов:</b> {overdue_loans} сыр.\n"
+    )
+
+    await message.answer(text)

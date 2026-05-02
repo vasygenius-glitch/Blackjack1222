@@ -29,13 +29,21 @@ async def cmd_help(message: types.Message):
     
     text += "💰 <b>ЭКОНОМИКА И БАНК:</b>\n"
     text += "<code>/profile</code> - Профиль (деньги, клан, брак, варны).\n"
-    text += "<code>/bank deposit/withdraw [сумма]</code> - Банк.\n"
+    text += "<code>/bank</code> - Главное меню банков (вклады, листы, инфо).\n"
+    text += "<code>/bank_offshore</code> - Скрыть счет в банке за комиссию.\n"
+    text += "<code>ограбить банк [Имя]</code> - Попытка кражи из банка.\n"
     text += "<code>/bonus</code> - Собрать прибыль и бонус.\n"
     text += "<code>/work</code>, <code>/crime</code> - Способы заработка.\n"
     text += "<code>/pay [сумма][реплай]</code> - Перевод денег.\n"
-    text += "<code>долг [сумма] [%][реплай]</code> - Дать в долг.\n"
+    text += "<code>долг [сумма] [%][реплай]</code> - Дать в долг (P2P).\n"
     text += "<code>выплатить[сумма] [реплай]</code> - Вернуть долг.\n"
     text += "<code>украсть</code> [реплай] - Карманная кража.\n\n"
+
+    text += "🏦 <b>ДЛЯ БАНКИРОВ:</b>\n"
+    text += "<code>создать банк [Имя]</code> - Открыть свой банк.\n"
+    text += "<code>/bankrate [3-13]</code> - Установить % по вкладам.\n"
+    text += "<code>/bank_stats</code> - Панель управления (вклады, кредиты).\n"
+    text += "<code>кредит [сумма] [%] [дни] [поручитель] [реплай]</code> - Выдать кредит игроку.\n\n"
 
     text += "📈 <b>КРИПТОБИРЖА:</b>\n"
     text += "<code>/криптосыроежка</code> - Главное меню рынка и графики.\n"
@@ -222,11 +230,20 @@ async def cmd_work(message: types.Message):
     rand = secrets.SystemRandom()
     base_earnings = rand.randint(500, 1500)
     
+    bank_profit_msg = ""
     if data.get('is_banker', False):
         # Доход банкиров от работы урезан до 10-20%
         base_earnings = int(base_earnings * 0.15)
         if base_earnings < 1:
             base_earnings = 1
+
+        # Банкир также приносит пользу своему банку
+        bank_contribution = rand.randint(1000, 5000)
+        from profile_bank import get_bank_info, create_or_update_bank
+        bank_data = await get_bank_info(chat_id, user_id)
+        if bank_data:
+            await create_or_update_bank(chat_id, user_id, {'capital': bank_data.get('capital', 0) + bank_contribution})
+            bank_profit_msg = f"\n🏢 Ваша работа принесла банку <b>{bank_contribution}</b> сыр. в капитал!"
 
     # --- БОНУС ПИТОМЦА ---
     pet = data.get('pet')
@@ -296,9 +313,12 @@ async def cmd_work(message: types.Message):
         "отработал смену на заводе",
         "собрал металлолом"
     ]
+    if data.get('is_banker', False):
+        jobs = ["поработал с документами", "провел встречу с инвесторами", "свел дебет с кредитом", "продал акции банка"]
+
     job = rand.choice(jobs)
 
-    await message.answer(f"💼 Ты <b>{job}</b> и заработал <b>{base_earnings}</b> сыроежек!{pet_msg}{collector_msg}")
+    await message.answer(f"💼 Ты <b>{job}</b> и заработал <b>{base_earnings}</b> сыроежек!{pet_msg}{collector_msg}{bank_profit_msg}")
 
 @router.message(Command("crime"))
 async def cmd_crime(message: types.Message):
@@ -395,3 +415,78 @@ async def cmd_crime(message: types.Message):
         fine = rand.randint(500, 1500)
         await update_user_balance(chat_id, user_id, -fine, is_debt_repayment=True)
         await message.answer(f"🚔 Тебя поймали! Суд выписал штраф в <b>{fine}</b> сыроежек.")
+@router.message(F.text.lower().startswith("ограбить банк"))
+async def cmd_rob_bank(message: types.Message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    full_name = escape_html(message.from_user.full_name)
+
+    data = await get_user_data(chat_id, user_id, full_name)
+    if data.get('is_banned', False):
+        return await message.answer("Ты в бане и не можешь грабить банки.")
+
+    if data.get('is_banker', False):
+        return await message.answer("🏦 Банкирам запрещено грабить банки коллег!")
+
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        return await message.answer("Использование: <code>ограбить банк [Название или ID]</code>")
+
+    # Cooldown (например, 12 часов)
+    last_rob = data.get('last_bank_rob_time', 0)
+    current_time = time.time()
+    if current_time - last_rob < 43200:
+        remain = int(43200 - (current_time - last_rob))
+        hours, rem = divmod(remain, 3600)
+        mins, _ = divmod(rem, 60)
+        return await message.answer(f"⏳ Полиция патрулирует город после недавнего налета. Заляг на дно еще на {hours} ч. {mins} мин.")
+
+    identifier = args[2]
+    from profile_bank import get_bank_info, create_or_update_bank
+    bank_data = await get_bank_info(chat_id, identifier)
+
+    if not bank_data:
+        return await message.answer("🏦 Банк не найден. Проверьте название.")
+
+    target_banker_id = bank_data['banker_id']
+    capital = bank_data.get('capital', 0)
+
+    if capital < 10000:
+        return await message.answer("В этом банке слишком мало денег, грабить нечего!")
+
+    await update_user_field(chat_id, user_id, 'last_bank_rob_time', current_time)
+
+    rand = secrets.SystemRandom()
+    stealth_level = data.get('skills', {}).get('stealth', 0)
+
+    # Базовый шанс успеха - 25% + 2% за каждый уровень стелса
+    success_chance = 0.25 + (stealth_level * 0.02)
+
+    if rand.random() < success_chance:
+        # Украли от 1% до 5% от капитала банка
+        steal_percent = rand.uniform(0.01, 0.05)
+        stolen_amount = int(capital * steal_percent)
+
+        await create_or_update_bank(chat_id, target_banker_id, {'capital': capital - stolen_amount})
+        await update_user_balance(chat_id, user_id, stolen_amount)
+
+        await message.answer(f"🥷 <b>УСПЕШНОЕ ОГРАБЛЕНИЕ!</b>\n\nВы ворвались в банк <b>{escape_html(bank_data.get('name'))}</b>, вскрыли сейф и вынесли <b>{stolen_amount}</b> сыроежек!\n<i>Банк понес убытки.</i>")
+    else:
+        # Провал
+        penalty = rand.randint(5000, 20000)
+        await update_user_balance(chat_id, user_id, -penalty)
+
+        # Выдаем временный мут через aiogram
+        from datetime import timedelta
+        try:
+            await message.bot.restrict_chat_member(
+                chat_id=chat_id,
+                user_id=user_id,
+                permissions=types.ChatPermissions(can_send_messages=False),
+                until_date=timedelta(minutes=30)
+            )
+            mute_text = "\nВас посадили в тюрьму (мут) на 30 минут."
+        except:
+            mute_text = "\nСпецназ пытался вас арестовать, но вам удалось сбежать, потеряв деньги в спешке."
+
+        await message.answer(f"🚔 <b>ОБЛАВА! СРАБОТАЛА СИГНАЛИЗАЦИЯ!</b>\n\nОграбление банка <b>{escape_html(bank_data.get('name'))}</b> провалилось. Вы потеряли <b>{penalty}</b> сыроежек при побеге.{mute_text}")

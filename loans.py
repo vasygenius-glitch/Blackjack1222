@@ -22,7 +22,7 @@ async def cmd_credit(message: types.Message):
 
     args = message.text.split()
     if len(args) < 4:
-        return await message.answer("Использование: <code>кредит [сумма] [%] [срок в днях]</code>\nПример: <code>кредит 1000 10 7</code>")
+        return await message.answer("Использование: <code>кредит [сумма] [%] [срок в днях]</code>\nПример: <code>кредит 1000 10 7</code>\n\nВы можете добавить поручителя: <code>кредит [сумма] [%] [срок] [ID_поручителя]</code>")
 
     borrower_id = message.reply_to_message.from_user.id
     if lender_id == borrower_id:
@@ -38,6 +38,15 @@ async def cmd_credit(message: types.Message):
             return
     except ValueError:
         return await message.answer("Сумма, процент и срок должны быть числами.")
+
+    guarantor_id = None
+    if len(args) >= 5:
+        try:
+            guarantor_id = int(args[4])
+            if guarantor_id == borrower_id:
+                return await message.answer("Заемщик не может быть поручителем самому себе.")
+        except ValueError:
+            return await message.answer("ID поручителя должен быть числом.")
 
     bank_data = await get_bank_info(chat_id, lender_id)
     if not bank_data:
@@ -55,7 +64,9 @@ async def cmd_credit(message: types.Message):
         'term_days': term_days,
         'chat_id': chat_id,
         'lender_id': lender_id,
-        'borrower_id': borrower_id
+        'borrower_id': borrower_id,
+        'guarantor_id': guarantor_id,
+        'original_principal': amount # Запоминаем изначальное тело кредита
     }
 
     builder = InlineKeyboardBuilder()
@@ -65,11 +76,17 @@ async def cmd_credit(message: types.Message):
     total_return = int(amount * (1 + percent / 100))
     bank_name = escape_html(bank_data.get('name', 'Неизвестный Банк'))
 
+    borrower_data = await get_user_data(chat_id, borrower_id)
+    credit_score = borrower_data.get('credit_score', 100)
+
+    guarantor_text = f"\nПоручитель (ID): <code>{guarantor_id}</code>" if guarantor_id else ""
+
     await message.answer(
         f"💸 <b>Кредитный договор с банком «{bank_name}»!</b>\n\n"
-        f"Вам одобрен кредит на <b>{amount}</b> сыроежек под <b>{percent}%</b> на <b>{term_days}</b> дней.\n"
+        f"Заемщик: <b>{escape_html(message.reply_to_message.from_user.full_name)}</b> (Рейтинг: {credit_score}){guarantor_text}\n\n"
+        f"Кредит на <b>{amount}</b> сыроежек под <b>{percent}%</b> на <b>{term_days}</b> дней.\n"
         f"Итого к возврату: <b>{total_return}</b> сыроежек.\n\n"
-        f"<b>{escape_html(message.reply_to_message.from_user.full_name)}</b>, согласны?",
+        f"Заемщик, согласны с условиями?",
         reply_markup=builder.as_markup()
     )
 
@@ -98,6 +115,7 @@ async def process_bank_loan(callback: types.CallbackQuery):
     amount = loan_info['amount']
     percent = loan_info['percent']
     term_days = loan_info['term_days']
+    guarantor_id = loan_info['guarantor_id']
     total_debt = int(amount * (1 + percent / 100))
 
     bank_data = await get_bank_info(chat_id, lender_id)
@@ -112,7 +130,9 @@ async def process_bank_loan(callback: types.CallbackQuery):
     debts = borrower_data.get('debts', {})
     
     due_date = int(time.time()) + (term_days * 86400)
-    str_lender = f"bank_{lender_id}_{due_date}" # Помечаем, что долг именно банку с датой
+    # Формат долга: bank_ID_DUEDATE_GUARANTORID_PRINCIPAL
+    g_id_str = str(guarantor_id) if guarantor_id else "none"
+    str_lender = f"bank_{lender_id}_{due_date}_{g_id_str}_{amount}"
 
     debts[str_lender] = debts.get(str_lender, 0) + total_debt
     
@@ -162,22 +182,58 @@ async def cmd_repay(message: types.Message):
         return await message.answer("У тебя нет столько денег на балансе.")
 
     current_debt = debts[target_debt_key]
-    repay_amount = min(amount, current_debt)
 
+    # Обработка досрочного погашения и банковской комиссии
+    banker_commission = 0
+    discount_msg = ""
+    if target_debt_key.startswith("bank_"):
+        parts = target_debt_key.split("_")
+        if len(parts) >= 5:
+            due_date = int(parts[2])
+            principal = int(parts[4])
+
+            # Проверяем, отдается ли весь долг целиком
+            if amount >= current_debt:
+                current_time = time.time()
+                # Если возвращаем сильно заранее (более 1 дня до конца срока)
+                if due_date - current_time > 86400:
+                    discount = int((current_debt - principal) * 0.2) # 20% скидка на проценты
+                    if discount > 0:
+                        current_debt -= discount
+                        discount_msg = f"\n🎁 <i>Скидка за досрочное погашение: -{discount} сыр.</i>"
+
+                # Комиссия банкира 10% от выплаченных процентов (если кредит отдан полностью)
+                profit_margin = current_debt - principal
+                if profit_margin > 0:
+                    banker_commission = int(profit_margin * 0.1)
+
+    repay_amount = min(amount, current_debt)
     await update_user_balance(chat_id, borrower_id, -repay_amount)
 
     if target_debt_key.startswith("bank_"):
         # Возврат банку в капитал
         bank_data = await get_bank_info(chat_id, lender_id)
         if bank_data:
-            await create_or_update_bank(chat_id, lender_id, {'capital': bank_data.get('capital', 0) + repay_amount})
+            # Начисляем капитал банку (минус премия банкиру)
+            await create_or_update_bank(chat_id, lender_id, {'capital': bank_data.get('capital', 0) + (repay_amount - banker_commission)})
+            # Начисляем премию банкиру на личный счет
+            if banker_commission > 0:
+                await update_user_balance(chat_id, lender_id, banker_commission)
     else:
         # Возврат обычному игроку
         await update_user_balance(chat_id, lender_id, repay_amount)
 
     debts[target_debt_key] -= repay_amount
+
+    # Повышаем рейтинг при полном закрытии долга
+    rating_msg = ""
     if debts[target_debt_key] <= 0:
         del debts[target_debt_key]
+        if target_debt_key.startswith("bank_"):
+            credit_score = borrower_data.get('credit_score', 100)
+            new_score = min(500, credit_score + 10)
+            await update_user_field(chat_id, borrower_id, 'credit_score', new_score)
+            rating_msg = f"\n📈 Ваш кредитный рейтинг повышен до <b>{new_score}</b>!"
 
     await update_user_field(chat_id, borrower_id, 'debts', debts)
-    await message.answer(f"✅ Ты вернул <b>{repay_amount}</b> сыроежек кредитору.\nОстаток долга: <b>{debts.get(target_debt_key, 0)}</b> сыроежек.")
+    await message.answer(f"✅ Ты вернул <b>{repay_amount}</b> сыроежек кредитору.{discount_msg}\nОстаток долга: <b>{debts.get(target_debt_key, 0)}</b> сыроежек.{rating_msg}")
