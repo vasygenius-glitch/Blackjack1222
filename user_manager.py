@@ -102,7 +102,7 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
             users_docs = await users_ref.get()
 
             total_loans_issued = 0
-            total_deposits = data.get('bank_deposit', 0)
+            total_deposits = 0
             str_uid = str(user_id)
 
             for doc in users_docs:
@@ -110,14 +110,19 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
                 if str_uid in udata.get('debts', {}):
                     total_loans_issued += udata.get('debts')[str_uid]
 
+                # We assume any client with a bank deposit is conceptually part of the "global" banking system for this banker
+                # Since there's no bank_id assigned to deposits yet, we tax all deposits in chat
+                total_deposits += udata.get('bank_deposit', 0)
+
             # 2. Плавающая субсидия: базовая (10кк) + 10% от суммы выданных кредитов (макс 100кк)
             subsidy = 10000000 + int(total_loans_issued * 0.1)
             if subsidy > 100000000: subsidy = 100000000
 
-            # 3. Страховой взнос: 1% от депозита банкира уходит в фонд
+            # 3. Страховой взнос: 1% от всех депозитов уходит в фонд
             insurance_tax = int(total_deposits * 0.01)
 
             net_bonus = subsidy - insurance_tax
+            if net_bonus < 0: net_bonus = 0
 
             ref = get_user_ref(chat_id, user_id)
             new_balance = data.get('balance', 0) + net_bonus
@@ -216,22 +221,32 @@ async def check_and_give_bonus(chat_id, user_id, full_name=None):
                         else:
                             del inventory[item_name]
 
-                        # Выплачиваем самому крупному кредитору
-                        biggest_lender = max(debts, key=debts.get)
-                        debt_amount = debts[biggest_lender]
-                        pay_amount = min(price, debt_amount)
+                        # Выплачиваем долги, начиная с самых крупных
+                        remaining_value = price
 
-                        debts[biggest_lender] -= pay_amount
-                        if debts[biggest_lender] <= 0:
-                            del debts[biggest_lender]
+                        # Сортируем кредиторов по убыванию долга
+                        sorted_lenders = sorted(debts.keys(), key=lambda k: debts[k], reverse=True)
 
-                        # Возвращаем сдачу если машина дороже долга
-                        change = price - pay_amount
-                        if change > 0:
-                            await update_user_balance(chat_id, user_id, change)
+                        for lender in sorted_lenders:
+                            if remaining_value <= 0:
+                                break
 
-                        # Переводим деньги кредитору
-                        await update_user_balance(chat_id, int(biggest_lender), pay_amount, is_debt_repayment=True)
+                            debt_amount = debts[lender]
+                            pay_amount = min(remaining_value, debt_amount)
+
+                            debts[lender] -= pay_amount
+                            if debts[lender] <= 0:
+                                del debts[lender]
+
+                            remaining_value -= pay_amount
+                            await update_user_balance(chat_id, int(lender), pay_amount, is_debt_repayment=True)
+
+                        # Возвращаем сдачу если машина дороже всех долгов
+                        if remaining_value > 0:
+                            await update_user_balance(chat_id, user_id, remaining_value)
+
+                        # После update_user_balance, нужно перечитать актуальную data из кэша, чтобы не затереть обновленный баланс
+                        data = get_from_cache(chat_id, user_id) or data
 
                         await ref.update({'inventory': inventory, 'debts': debts})
                         data['inventory'] = inventory

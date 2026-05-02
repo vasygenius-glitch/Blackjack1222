@@ -292,8 +292,14 @@ async def cb_bank_refinance(callback: types.CallbackQuery):
             debts[str_uid] = new_amount
         await update_user_field(chat_id, target_id, 'debts', debts)
         await callback.answer(f"Долг снижен! Новая сумма: {new_amount}", show_alert=True)
-        callback.data = f"bank_debtor_{target_id}"
-        await cb_bank_debtor(callback)
+        # Manually construct the panel instead of modifying the pydantic model `callback.data`
+        name = escape_html(target_data.get('full_name', f'ID {target_id}'))
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Простить долг", callback_data=f"bank_forgive_{target_id}")
+        builder.button(text="Снизить долг на 10% (Рефинанс)", callback_data=f"bank_refinance_{target_id}")
+        builder.button(text="🔙 Назад", callback_data="bank_manage_debts")
+        builder.adjust(1)
+        await callback.message.edit_text(f"Управление долгом: <b>{name}</b>\nТекущий долг: <b>{new_amount}</b>", reply_markup=builder.as_markup())
     else:
         await callback.answer("Долга нет.", show_alert=True)
 

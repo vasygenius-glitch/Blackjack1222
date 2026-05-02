@@ -157,11 +157,13 @@ async def cmd_pay(message: types.Message):
     await get_user_data(chat_id, target_user.id, target_name)
     await update_user_balance(chat_id, target_user.id, amount)
 
+    tax_target = "админам"
     if commission > 0:
         if bankers:
             import random
             random_banker = random.choice(bankers)
             await update_user_balance(chat_id, int(random_banker), commission)
+            tax_target = "банкирам"
         else:
             try:
                 admins = await message.chat.get_administrators()
@@ -185,10 +187,12 @@ async def cmd_pay(message: types.Message):
     ]
     phrase = secrets.choice(phrases) if commission > 0 else "Налог отменен! Деньги дошли без потерь."
 
+    tax_info_str = f" (Налог {tax_percent}% ушел {tax_target})." if commission > 0 else ""
+
     await message.answer(
         f"💸 <b>Успешный перевод!</b>\n\n"
         f"Отправлено: {amount} сыроежек пользователю {target_name}.\n"
-        f"<i>{phrase}</i> (Налог {tax_percent}% ушел админам)."
+        f"<i>{phrase}</i>{tax_info_str}"
     )
 
 @router.message(Command("bonus"))
