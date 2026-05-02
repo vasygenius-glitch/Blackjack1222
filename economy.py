@@ -3,7 +3,7 @@ from aiogram.filters import Command
 import secrets
 import time
 from economy_utils import get_global_tax
-from user_manager import get_user_data, update_user_balance, check_and_give_bonus, update_user_field, get_top_users, get_all_users_in_chat
+from user_manager import get_user_data, update_user_balance, check_and_give_bonus, update_user_field, get_top_users, get_bankers_in_chat
 from escape import escape_html
 
 router = Router()
@@ -145,12 +145,8 @@ async def cmd_pay(message: types.Message):
         return
 
     # Ищем банкиров в чате (SWIFT система)
-    docs = await get_all_users_in_chat(chat_id)
-    bankers = []
-    for doc in docs:
-        udata = doc.to_dict()
-        if udata.get('is_banker', False):
-            bankers.append(doc.id)
+    docs = await get_bankers_in_chat(chat_id)
+    bankers = [doc.id for doc in docs]
 
     await update_user_balance(chat_id, sender_id, -total_cost)
 
@@ -235,9 +231,6 @@ async def cmd_work(message: types.Message):
     if data.get('is_banned', False):
         return await message.answer("Ты в бане и не можешь работать.")
         
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Вы — уважаемый Банкир. Черная работа не для вас.")
-
     last_work = data.get('last_work_time', 0)
     current_time = time.time()
 
@@ -322,9 +315,6 @@ async def cmd_crime(message: types.Message):
     if data.get('is_banned', False):
         return await message.answer("Ты в бане и не можешь совершать преступления.")
         
-    if data.get('is_banker', False):
-        return await message.answer("🏦 Вы — уважаемый Банкир. Воровать не по статусу.")
-
     last_crime = data.get('last_crime_time', 0)
     current_time = time.time()
 

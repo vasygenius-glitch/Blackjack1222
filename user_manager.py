@@ -310,3 +310,15 @@ async def get_all_users_in_chat(chat_id):
     ref = db.collection('chats').document(str(chat_id)).collection('users')
     docs = await ref.get()
     return docs
+
+async def get_bankers_in_chat(chat_id):
+    db = get_db()
+    ref = db.collection('chats').document(str(chat_id)).collection('users')
+    # Because of mock db limitations in db.py, we might need to filter manually if 'where' isn't fully mocked
+    try:
+        docs = await ref.where('is_banker', '==', True).get()
+    except:
+        # Fallback for mock db
+        docs = await ref.get()
+        return [d for d in docs if d.to_dict().get('is_banker', False)]
+    return docs
